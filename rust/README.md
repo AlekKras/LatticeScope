@@ -21,7 +21,7 @@ Two modules:
 
 This is a from-scratch Rust reimplementation of an earlier Python+C version.
 The rewrite exists to fix three issues that stood between the tool and
-real-world use (see [What the rewrite fixes](#what-the-rewrite-fixes)).
+real-world use (see [Why Write in Rust if Py would do](#why-write-in-rust-if-py-would-do)).
 
 ## Build
 
@@ -254,7 +254,7 @@ fields other than the `--crash-dir` path baked into `path`. Payload generation
 happens in the parent before either backend is asked to run it, so which
 backend runs a call was never part of what determines its outcome.
 
-## What the rewrite fixes
+## Why Write in Rust if Py would do
 
 1. **The cropped-t statistic no longer over-claims.** The Python version
    computed the t-test at eight percentile crops and reported the maximum `|t|`
