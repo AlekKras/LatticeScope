@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.so
+*.dylib
+*.egg-info/
+.pytest_cache/
+.DS_Store
+.vscode/
+.idea/
+*.swp
+crashes/
+crashes_poly/
+
+# rust/ (Cargo build output + fetched PQClean source; *.so and crashes/
+# above already cover the built .so files and fuzz-lattice's crash-dir)
+target/
+.pqclean-src/

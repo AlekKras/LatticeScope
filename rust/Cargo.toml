@@ -1,0 +1,27 @@
+[package]
+name = "latticescope"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Defensive auditing framework for post-quantum cryptography implementations (TVLA timing-leakage detection + structure-aware lattice fuzzing)."
+license = "MIT"
+readme = "README.md"
+keywords = ["post-quantum", "cryptography", "side-channel", "tvla", "fuzzing"]
+categories = ["cryptography", "command-line-utilities"]
+
+[[bin]]
+name = "latticescope"
+path = "main.rs"
+
+# Single runtime dependency: libc (no transitive deps; maintained by the Rust
+# project and used by the standard library itself). Everything else — argument
+# parsing, terminal rendering, JSON emission, the cycle counter — is in-tree so
+# the whole tool stays auditable.
+[dependencies]
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"      # a panic in the parent should abort, not unwind across FFI

@@ -1,0 +1,5 @@
+# LatticeScope runtime dependencies.
+# rich powers the live --tvla / --fuzz-lattice terminal UIs. If it is absent
+# the tool automatically falls back to plain-text status lines, so rich is
+# recommended but not strictly required.
+rich>=13.0
