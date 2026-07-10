@@ -69,19 +69,24 @@ def _tvla_render(target, cfg, snap):
     stats.add_row("95% CI of Δ", f"[{snap.ci95[0]:+.2f}, {snap.ci95[1]:+.2f}]")
     stats.add_row("n_A / n_B", f"{snap.n_a:,} / {snap.n_b:,}")
 
-    # |t| relative to threshold, with a visible marker at the threshold.
-    scale = max(thr * 1.5, snap.max_abs_t)
+    # |t| bar with the threshold pinned at a fixed, always-visible column
+    # (25% width). Fill saturates once |t| blows past — the exact overshoot
+    # length past the marker isn't meaningful, so annotate the magnitude.
+    # ponytail: fixed thr*4 scale, switch to log if sub-2x resolution matters.
+    scale = thr * 4.0
     tbar = _bar(snap.max_abs_t, scale, 40)
-    marker_pos = int(min(1.0, thr / scale) * 40)
+    marker_pos = int((thr / scale) * 40)  # == 10, i.e. one quarter in
     tbar = tbar[:marker_pos] + "|" + tbar[marker_pos + 1:]
+    over = snap.max_abs_t / thr if thr else 0.0
+    tag = f"  {over:.1f}× over" if over >= 1.0 else ""
     graph = Table.grid()
     graph.add_column()
-    graph.add_row(Text(f"|t|  {tbar}  {snap.max_abs_t:5.2f}", style=color))
-    # Divergence view: two mean bars sharing a scale.
-    lo = min(snap.mean_a, snap.mean_b)
-    span = max(1.0, abs(snap.mean_a - snap.mean_b) * 4)
-    graph.add_row(Text(f" A   {_bar(snap.mean_a - lo, span, 40, '▓')}", style="cyan"))
-    graph.add_row(Text(f" B   {_bar(snap.mean_b - lo, span, 40, '▓')}", style="magenta"))
+    graph.add_row(Text(f"|t|  {tbar}  {snap.max_abs_t:6.2f}{tag}", style=color))
+    # Divergence view: mean cycles from a zero baseline, scaled to the larger
+    # class. Equal means -> equal bars; a large gap -> full bar vs. a sliver.
+    mmax = max(snap.mean_a, snap.mean_b, 1.0)
+    graph.add_row(Text(f" A   {_bar(snap.mean_a, mmax, 32, '▓')} {snap.mean_a:>10,.0f} cyc", style="cyan"))
+    graph.add_row(Text(f" B   {_bar(snap.mean_b, mmax, 32, '▓')} {snap.mean_b:>10,.0f} cyc", style="magenta"))
 
     if snap.leaking:
         verdict = Panel(Align.center(Text(
@@ -232,3 +237,21 @@ def _run_fuzz_plain(fuzzer, cfg, target):
                   f"[{snap.current_strategy}]")
             last = now
     return final
+
+
+if __name__ == "__main__":
+    # ponytail: self-check for the bar math (the only non-trivial logic here).
+    assert _bar(0, 10, 8) == "░" * 8
+    assert _bar(10, 10, 8) == "█" * 8
+    assert _bar(100, 10, 8) == "█" * 8            # saturates, never overflows
+    assert len(_bar(3, 10, 8)) == 8
+    # Threshold marker must land at a fixed, visible column for any |t|.
+    thr, width = 4.5, 40
+    scale = thr * 4.0
+    for t in (0.0, 3.0, 4.5, 700.0):
+        bar = _bar(t, scale, width)
+        pos = int((thr / scale) * width)
+        marked = bar[:pos] + "|" + bar[pos + 1:]
+        assert 0 < pos < width, pos               # never collapses to an edge
+        assert marked[pos] == "|" and len(marked) == width
+    print("ui.py self-check OK")
