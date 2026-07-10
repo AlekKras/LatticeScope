@@ -294,6 +294,15 @@ Valid ciphertexts take the accept branch, so the timing test never trips the
 memory bug — only the fork-isolated fuzzer does. Build it standalone with
 `demo/build_demo.sh`.
 
+> **The planted leak is deliberately gross.** The reject branch adds tens of
+> thousands of loop iterations (~15µs, `|t|` in the hundreds) so it fires
+> reliably on *any* counter — including the coarse macOS nanosecond timer. That
+> magnitude is a demo convenience, **not** a measure of the tool's real
+> sensitivity. Catching a realistic single-digit-cycle leak needs an x86_64
+> host, a pinned/quiesced core, and many more iterations (see [Measurement
+> setup](#measurement-setup-read-this-before-trusting-numbers)); on the macOS
+> ns timer such subtle leaks are unresolvable.
+
 ## Layout
 
 ```

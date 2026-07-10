@@ -2,6 +2,8 @@
 
 This is intended for the demo portion of a DEF CON 34 presentation. This project includes a bundled demo target that is intentionally flawed so you can try both detectors without needing your own library.
 
+> **Note on the planted timing leak.** The reject path in [demo/vuln_kem.c](demo/vuln_kem.c) and [demo/vuln_dsa.c](demo/vuln_dsa.c) adds tens of thousands of loop iterations (~15µs, `|t|` in the hundreds) on purpose, so it trips on *any* counter — including macOS's coarse nanosecond timer. This is a deliberately gross signal for demo reliability; it is **not** representative of the tool's real sensitivity. Detecting a realistic single-digit-cycle leak requires an x86_64 host, a pinned/quiesced core, and many more iterations; on the macOS ns timer such subtle leaks are unresolvable.
+
 ## 1. Create and activate a virtual environment
 
 From the project root:
