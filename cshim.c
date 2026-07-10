@@ -51,6 +51,8 @@ static inline uint64_t cs_cycles(void)
     return ((uint64_t)hi << 32) | (uint64_t)lo;
 }
 
+#define CS_UNIT "cycles (TSC)"
+
 int cs_arch_is_x86(void) { return 1; }
 
 #elif defined(__APPLE__)
@@ -68,6 +70,8 @@ static inline uint64_t cs_cycles(void)
     }
     return mach_absolute_time() * tb.numer / tb.denom;
 }
+
+#define CS_UNIT "ns (mach)"
 
 int cs_arch_is_x86(void) { return 0; }
 
@@ -87,6 +91,8 @@ static inline uint64_t cs_cycles(void)
     return v;
 }
 
+#define CS_UNIT "ticks (CNTVCT)"
+
 int cs_arch_is_x86(void) { return 0; }
 
 #else
@@ -95,6 +101,10 @@ int cs_arch_is_x86(void) { return 0; }
 
 /* Exported single read for the generic Python-driven measurement path. */
 uint64_t read_cycles(void) { return cs_cycles(); }
+
+/* Honest per-platform label for whatever cs_cycles() actually counts, so the
+ * UI stops calling mach nanoseconds "cycles". */
+const char *cs_counter_unit(void) { return CS_UNIT; }
 
 /* Rough measurement overhead of a back-to-back counter read (cycles). The
  * caller can subtract this as a constant; it cancels in TVLA anyway. */

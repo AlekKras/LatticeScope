@@ -75,6 +75,9 @@ def run_selftest(iterations: int = 500_000,
     from .tvla import KemLeakageTest, SignLeakageTest, TvlaConfig
     from .fuzz import FuzzConfig, LatticeFuzzer
     from .ui import run_tvla_ui, run_fuzz_ui
+    from .build_shim import counter_unit
+
+    unit = counter_unit()
 
     src = _find_demo_source()
     if src is None:
@@ -111,7 +114,7 @@ def run_selftest(iterations: int = 500_000,
     if tvla_final is not None and tvla_final.leaking:
         tvla_ok = True
         print(f"\nRESULT: LEAK DETECTED  max|t|={tvla_final.max_abs_t:.2f} "
-              f"> {tvla_cfg.threshold}  Δ={tvla_final.diff:+.1f} cyc  "
+              f"> {tvla_cfg.threshold}  Δ={tvla_final.diff:+.1f} {unit}  "
               f"p={tvla_final.p_value:.1e}  (as expected)")
     else:
         mt = tvla_final.max_abs_t if tvla_final else float("nan")
@@ -160,7 +163,7 @@ def run_selftest(iterations: int = 500_000,
             if sign_final is not None and sign_final.leaking:
                 sign_ok = True
                 print(f"\nRESULT: LEAK DETECTED  max|t|={sign_final.max_abs_t:.2f} "
-                      f"> {sign_cfg.threshold}  Δ={sign_final.diff:+.1f} cyc  "
+                      f"> {sign_cfg.threshold}  Δ={sign_final.diff:+.1f} {unit}  "
                       f"p={sign_final.p_value:.1e}  (as expected)")
             else:
                 mt = sign_final.max_abs_t if sign_final else float("nan")

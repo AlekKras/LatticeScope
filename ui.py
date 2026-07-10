@@ -42,7 +42,7 @@ def _bar(value: float, vmax: float, width: int, char: str = "█") -> str:
 # TVLA
 # ===========================================================================
 
-def _tvla_render(target, cfg, snap):
+def _tvla_render(target, cfg, snap, unit):
     thr = cfg.threshold
     color = "bright_red" if snap.leaking else ("yellow" if snap.max_abs_t > thr * 0.6 else "bright_green")
 
@@ -64,9 +64,9 @@ def _tvla_render(target, cfg, snap):
     stats.add_row("t (current)", f"[{color}]{snap.t:+.3f}[/{color}]")
     stats.add_row("max |t|", f"[{color}]{snap.max_abs_t:.3f}[/{color}]")
     stats.add_row("p-value", f"{snap.p_value:.2e}")
-    stats.add_row("mean A / B (cyc)", f"{snap.mean_a:,.1f} / {snap.mean_b:,.1f}")
-    stats.add_row("Δ mean (cyc)", f"{snap.diff:+.2f}")
-    stats.add_row("95% CI of Δ", f"[{snap.ci95[0]:+.2f}, {snap.ci95[1]:+.2f}]")
+    stats.add_row(f"mean A / B ({unit})", f"{snap.mean_a:,.1f} / {snap.mean_b:,.1f}")
+    stats.add_row(f"Δ mean ({unit})", f"{snap.diff:+.2f}")
+    stats.add_row(f"95% CI of Δ ({unit})", f"[{snap.ci95[0]:+.2f}, {snap.ci95[1]:+.2f}]")
     stats.add_row("n_A / n_B", f"{snap.n_a:,} / {snap.n_b:,}")
 
     # |t| bar with the threshold pinned at a fixed, always-visible column
@@ -85,13 +85,13 @@ def _tvla_render(target, cfg, snap):
     # Divergence view: mean cycles from a zero baseline, scaled to the larger
     # class. Equal means -> equal bars; a large gap -> full bar vs. a sliver.
     mmax = max(snap.mean_a, snap.mean_b, 1.0)
-    graph.add_row(Text(f" A   {_bar(snap.mean_a, mmax, 32, '▓')} {snap.mean_a:>10,.0f} cyc", style="cyan"))
-    graph.add_row(Text(f" B   {_bar(snap.mean_b, mmax, 32, '▓')} {snap.mean_b:>10,.0f} cyc", style="magenta"))
+    graph.add_row(Text(f" A   {_bar(snap.mean_a, mmax, 32, '▓')} {snap.mean_a:>10,.0f} {unit}", style="cyan"))
+    graph.add_row(Text(f" B   {_bar(snap.mean_b, mmax, 32, '▓')} {snap.mean_b:>10,.0f} {unit}", style="magenta"))
 
     if snap.leaking:
         verdict = Panel(Align.center(Text(
             f" LEAK DETECTED  |t| = {snap.max_abs_t:.2f} > {thr}  "
-            f"(Δ = {snap.diff:+.2f} cyc, p = {snap.p_value:.1e}) ",
+            f"(Δ = {snap.diff:+.2f} {unit}, p = {snap.p_value:.1e}) ",
             style="bold white on red")), box=box.HEAVY, style="red")
     else:
         verdict = Panel(Align.center(Text(
@@ -104,8 +104,9 @@ def _tvla_render(target, cfg, snap):
 
 
 def run_tvla_ui(test, cfg, target):
+    unit = test.lib.cs_counter_unit().decode()  # honest per-arch counter label
     if not _interactive():
-        return _run_tvla_plain(test, cfg, target)
+        return _run_tvla_plain(test, cfg, target, unit)
     console = Console()
     final = None
     with Live(console=console, auto_refresh=False, screen=False) as live:
@@ -114,16 +115,16 @@ def run_tvla_ui(test, cfg, target):
             final = snap
             now = time.perf_counter()
             if now - last >= 0.08 or snap.leaking:
-                live.update(_tvla_render(target, cfg, snap), refresh=True)
+                live.update(_tvla_render(target, cfg, snap, unit), refresh=True)
                 last = now
             if snap.leaking and cfg.stop_on_leak:
                 break
         if final:
-            live.update(_tvla_render(target, cfg, final), refresh=True)
+            live.update(_tvla_render(target, cfg, final, unit), refresh=True)
     return final
 
 
-def _run_tvla_plain(test, cfg, target):
+def _run_tvla_plain(test, cfg, target, unit):
     print(f"[TVLA] target={target.params.name} probe={target.probe_name} "
           f"mode={cfg.mode} threshold=|t|>{cfg.threshold}")
     final = None
@@ -139,11 +140,11 @@ def _run_tvla_plain(test, cfg, target):
         if now - last >= 0.5 or snap.leaking:
             print(f"  iter={snap.iterations:>10,}  exec/s={snap.exec_per_s:>9,.0f}  "
                   f"t={snap.t:+.3f}  max|t|={snap.max_abs_t:.3f}  "
-                  f"Δ={snap.diff:+.2f}cyc  p={snap.p_value:.1e}")
+                  f"Δ={snap.diff:+.2f} {unit}  p={snap.p_value:.1e}")
             last = now
         if snap.leaking:
             print(f"  *** LEAK: max|t|={snap.max_abs_t:.2f} > {cfg.threshold} "
-                  f"Δ={snap.diff:+.2f}cyc CI95=[{snap.ci95[0]:+.2f},{snap.ci95[1]:+.2f}]")
+                  f"Δ={snap.diff:+.2f} {unit} CI95=[{snap.ci95[0]:+.2f},{snap.ci95[1]:+.2f}]")
             if cfg.stop_on_leak:
                 break
     return final

@@ -183,6 +183,11 @@ results:
   branch shows up as a mean difference regardless — but do **not** read the raw
   numbers as core cycles. `read_cycles_overhead()` reports the counter's own
   read cost so you can sanity-check the noise floor.
+- **macOS is coarse.** On macOS (including Apple Silicon) there is no
+  userspace `CNTVCT_EL0` path, so the counter falls back to
+  `mach_absolute_time` and reports **nanoseconds**, not cycles — the UI labels
+  the unit accordingly. At ~1ns resolution, sub-microsecond leaks are not
+  resolvable there; prefer x86_64 Linux for fine-grained timing work.
 - **Sample enough.** `|t|` grows with `sqrt(n)`; a genuinely constant-time
   implementation should keep `|t|` bounded as iterations climb, while a leak
   diverges. Watch the trend, not a single snapshot. Use `--iterations` to cap
