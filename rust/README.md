@@ -371,10 +371,20 @@ the framework can be exercised end-to-end:
   KyberSlash-style stand-in). TVLA should flag it.
 * `crypto_kem_dec_ct` — the same computation made input-independent. TVLA should
   **not** flag it. Use it as a negative control.
+* `crypto_sign_verify` — a detached ML-DSA-65-shaped verify (`--profile
+  dilithium3`) whose reject path does signature-dependent extra work while the
+  accept path is short and fixed. TVLA `--op verify` should flag it. This is the
+  signature-side analogue of `crypto_kem_dec`'s leak (see "Known gaps" below for
+  how fixed-vs-random exercises it).
 * `poly_frombytes_vuln` — a 12-bit unpacker with two planted, boundary-triggered
   bugs: coefficient `0x0FFF` → NULL deref (SIGSEGV), coefficient `Q` (3329) →
   divide-by-zero (SIGFPE). The structure-aware mutators emit exactly these
   values; blind byte fuzzing rarely would.
+* `sig_unpack_vuln` — the signature-side analogue: a 23-bit (ML-DSA) coefficient
+  unpacker with two planted, boundary-triggered bugs — coefficient `0x7FFFFF`
+  (`2^23-1`) → NULL deref (SIGSEGV), coefficient `Q` (8380417) → divide-by-zero
+  (SIGFPE). `--surface deserialize --profile dilithium3` packs at 23 bits and
+  emits exactly these values.
 * `decompress_ct_vuln` — a Kyber768-shaped (`du=10,dv=4,k=3`) compressed-
   ciphertext decompressor with two planted, boundary-triggered bugs, one per
   compressed part: a `du`-width (`c1`) coefficient `== 0` → NULL deref
@@ -385,6 +395,29 @@ the framework can be exercised end-to-end:
 
 It stays in C on purpose: Rust guards integer divide-by-zero, so an all-Rust
 mock could not raise a genuine hardware SIGFPE.
+
+`cargo test` exercises the mock end-to-end (fuzzing `poly_frombytes_vuln` and
+`sig_unpack_vuln`, TVLA on `crypto_sign_verify`) so a regression in the engines,
+mock, or profiles is caught in CI — not only by the manual `demo` subcommand.
+
+## Known gaps
+
+* **TVLA fixed-vs-random cannot mint valid material, so `--op verify` only
+  exercises the reject path.** The engine fills both input classes with random
+  bytes; it never calls the target's own `crypto_sign_keypair` /
+  `crypto_sign_signature` (or KEM `keypair`/`enc`) to produce a *valid*
+  signature. A uniformly random ~3.3KB signature never matches the validity
+  tag, so both classes take the **reject** branch, and what TVLA measures is
+  the reject path's *signature-dependent* timing (the fixed class has fixed
+  timing; the random class's mean shifts) — a legitimate non-constant-time
+  finding, and the same mechanism as the `crypto_kem_dec` KEM demo. The
+  consequence is that the mock's **accept** branch is unreachable under the
+  demo, and the tool cannot yet do the Python version's "fixed-*invalid*
+  (reject) vs *valid* (accept)" contrast that separates the two branches and
+  catches implicit-rejection / rejection-sampling leaks specifically. Closing
+  this means binding the keygen/sign (and KEM keygen/enc) symbols and adding a
+  fixed-invalid-vs-valid mode — a real capability difference, not yet
+  implemented.
 
 ## Scope and authorisation
 

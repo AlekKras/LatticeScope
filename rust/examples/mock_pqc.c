@@ -6,7 +6,7 @@
  * library present, and so a DefCon audience can watch the tooling light
  * up on known-planted flaws before it is pointed at a real target.
  *
- * It exposes four things:
+ * It exposes six things:
  *
  *   crypto_kem_dec        - a decapsulation whose runtime depends on the
  *                           ciphertext (a stand-in for a KyberSlash-style
@@ -16,6 +16,12 @@
  *   crypto_kem_dec_ct     - the same computation made input-independent
  *                           (constant work). TVLA should NOT flag this.
  *                           Use it as a negative control.
+ *
+ *   crypto_sign_verify    - a detached ML-DSA-65-shaped verify whose reject
+ *                           path does signature-dependent extra work (the
+ *                           accept path is short and fixed). The signature
+ *                           side of the crypto_kem_dec leak. TVLA --op verify
+ *                           should flag this.
  *
  *   poly_frombytes_vuln   - a 12-bit coefficient unpacker containing two
  *                           planted, boundary-triggered bugs:
@@ -34,6 +40,14 @@
  *                           exactly 0, so the `--surface compressed` payload
  *                           builder's near-zero/near-Q boundary values land
  *                           here reliably after compression.
+ *
+ *   sig_unpack_vuln       - the signature-side analogue of poly_frombytes_vuln:
+ *                           a 23-bit (ML-DSA) coefficient unpacker with two
+ *                           planted, boundary-triggered bugs:
+ *                             * coefficient == 0x7FFFFF (2^23-1) -> SIGSEGV
+ *                             * coefficient == Q (8380417)       -> SIGFPE
+ *                           `--surface deserialize --profile dilithium3`
+ *                           packs at 23 bits and emits exactly these values.
  *
  * Build:
  *   cc -O3 -fPIC -shared -o libmock_pqc.so mock_pqc.c
@@ -87,6 +101,55 @@ int crypto_kem_dec_ct(uint8_t *ss, const uint8_t *ct, const uint8_t *sk) {
     for (int i = 0; i < SS_LEN; i++)
         ss[i] = (uint8_t)((acc >> ((i % 8) * 8)) & 0xFF) ^ sk[i % 32];
     return 0;
+}
+
+/* --- Module-1 fodder: leaky detached-signature verify -------------- */
+
+/* ML-DSA-65 detached-verify ABI (PQClean/SUPERCOP convention). This models a
+ * non-constant-time verify: the accept path is short and input-independent,
+ * while the reject path's runtime scales with the signature (popcount of the
+ * first bytes -- the same data-dependent shape as crypto_kem_dec above, on the
+ * signature side rather than the ciphertext side). A uniformly random ~3.3KB
+ * signature effectively never matches the validity tag, so TVLA's fixed-vs-
+ * random interleave stays on the reject path and measures its signature-
+ * dependent timing -> flagged. See README "Known gaps" for why the accept
+ * branch is unreachable under fixed-vs-random. */
+#define DILITHIUM_SIG_LEN 3309
+#define DILITHIUM_PK_LEN  1952
+
+int crypto_sign_verify(const uint8_t *sig, size_t siglen,
+                       const uint8_t *m, size_t mlen, const uint8_t *pk) {
+    uint64_t acc = 0;
+    if (siglen < DILITHIUM_SIG_LEN)
+        return -1;
+
+    /* Validity tag over the signature body + message + public key; the last
+     * signature byte must equal it to accept. Fixed work, no data-dependent
+     * branch, so it adds equally to both TVLA classes. */
+    uint32_t s = 0;
+    for (int i = 0; i < DILITHIUM_SIG_LEN - 1; i++) s = s * 31u + sig[i];
+    for (size_t i = 0; i < mlen; i++)               s = s * 31u + m[i];
+    for (int i = 0; i < DILITHIUM_PK_LEN; i++)      s = s * 31u + pk[i];
+    uint8_t t = (uint8_t)(s ^ (s >> 8) ^ (s >> 16));
+
+    if (sig[DILITHIUM_SIG_LEN - 1] == t) {
+        /* ACCEPT: short, fixed work (input-independent). */
+        for (int i = 0; i < 64; i++) acc += sig[i & 63];
+        g_sink += acc;
+        return 0;
+    }
+
+    /* REJECT: signature-dependent extra work -- the planted timing leak. */
+    unsigned pc = 0;
+    for (int i = 0; i < 4; i++) {
+        uint8_t b = sig[i];
+        while (b) { pc += (b & 1u); b >>= 1; }
+    }
+    for (unsigned k = 0; k < pc * 6000u; k++)
+        acc += (acc * 1103515245ULL + 12345ULL);
+
+    g_sink += acc;
+    return -1;
 }
 
 /* --- Module-2 fodder: boundary-triggered deserializer bugs --------- */
@@ -176,6 +239,34 @@ int decompress_ct_vuln(uint8_t *out, const uint8_t *ct) {
             g_sink += (uint64_t)(100 / z);         /* SIGFPE */
         }
         out[i] ^= (uint8_t)(v & 0xFF);
+    }
+    return 0;
+}
+
+/* --- Module-2 fodder: planted signature-unpacker bugs -------------- */
+
+/* ML-DSA-shaped 23-bit coefficient unpacker (256 coeffs from 736 bytes,
+ * matching packing::pack_bits at poly_bits=23). The signature-side analogue
+ * of poly_frombytes_vuln, reusing the same generic little-endian bit reader.
+ * `--surface deserialize --profile dilithium3` packs at 23 bits and its
+ * boundary mutators emit exactly the two planted trigger values. */
+#define DILITHIUM_Q       8380417
+#define DILITHIUM_FMAX23  0x7FFFFF   /* 2^23 - 1 */
+
+int sig_unpack_vuln(uint8_t *out, const uint8_t *in) {
+    for (int i = 0; i < KYBER_N; i++) {
+        uint32_t c = unpack_d(in, i, 23);
+
+        if (c == DILITHIUM_FMAX23) {         /* 23-bit max -> planted NULL deref */
+            volatile int *p = (volatile int *)0;
+            *p = (int)c;                     /* SIGSEGV */
+        }
+        if (c == DILITHIUM_Q) {              /* exactly Q -> planted div-by-zero */
+            volatile int z = (int)c - DILITHIUM_Q;  /* == 0 */
+            g_sink += (uint64_t)((int)c / z);        /* SIGFPE */
+        }
+
+        out[i] = (uint8_t)(c & 0xFF);
     }
     return 0;
 }

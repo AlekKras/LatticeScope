@@ -314,6 +314,28 @@ fn cmd_demo(a: &Args) -> Result<i32, String> {
             exit = 2;
         }
         println!();
+
+        println!("── demo: fuzzing the planted-bug signature unpacker (sig_unpack_vuln) ──");
+        let dsa = profiles::get("dilithium3").unwrap();
+        let mut se = fuzz::FuzzEngine::new(
+            &mock,
+            dsa,
+            fuzz::Surface::Deserialize,
+            Some("sig_unpack_vuln"),
+            -1,
+            1,
+            "crashes",
+            1.0,
+            None, // in-len defaults to 736 (256 coeffs * 23 bits)
+            None, // out-len defaults to n = 256
+            None, // field-bits defaults to the profile's poly_bits = 23
+            a.has("fork-server"),
+        )?;
+        let st = fuzz::run(&mut se, iters, 200, 12.0);
+        if st.crashes > 0 {
+            exit = 2;
+        }
+        println!();
     }
 
     if only == "both" || only == "tvla" {
@@ -328,6 +350,20 @@ fn cmd_demo(a: &Args) -> Result<i32, String> {
         println!(
             "\nnegative control: re-run with `--symbol crypto_kem_dec_ct` — the constant-time\n\
              variant should NOT be flagged."
+        );
+        println!();
+
+        println!("── demo: TVLA on the leaky ML-DSA verify (crypto_sign_verify) ──");
+        let dsa = profiles::get("dilithium3").unwrap();
+        let mut ve = tvla::TvlaEngine::new(&mock, dsa, tvla::Op::Verify, Some("crypto_sign_verify"), -1, 100_000, 1)?;
+        let iters = if quick { 40_000 } else { 200_000 };
+        let st = tvla::run(&mut ve, iters, 2000, if quick { 4000 } else { 20_000 }, 12.0);
+        if st.verdict == tvla::Verdict::Leak {
+            exit = 2;
+        }
+        println!(
+            "\nrandom signatures never match the validity tag, so both TVLA classes take the\n\
+             reject path — this measures its signature-dependent timing (see README \"Known gaps\")."
         );
     }
 
@@ -388,5 +424,67 @@ fn main() {
             eprintln!("error: {e}");
             std::process::exit(1);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// integration tests — drive the bundled mock end-to-end so a regression in the
+// engines, the mock, or the profiles is caught by `cargo test`, not only by
+// the manual `demo` subcommand. These fork crashing children and load the
+// mock .so, so they need a C compiler (same as `demo`).
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn mock() -> String {
+        ensure_mock().expect("mock target must build (a C compiler is required)")
+    }
+
+    fn crash_dir(name: &str) -> String {
+        std::env::temp_dir()
+            .join(format!("ls_test_crashes_{name}"))
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    /// The `deserialize` fuzzer must trip the planted 12-bit unpacker bugs.
+    #[test]
+    fn fuzz_deserialize_finds_planted_bugs() {
+        let m = mock();
+        let profile = profiles::get("mock").unwrap();
+        let mut fe = fuzz::FuzzEngine::new(
+            &m, profile, fuzz::Surface::Deserialize, Some("poly_frombytes_vuln"),
+            -1, 1, &crash_dir("deser"), 1.0, None, None, None, false,
+        ).unwrap();
+        fe.step(800);
+        assert!(fe.snapshot().crashes > 0, "fuzzer found no crash in poly_frombytes_vuln");
+    }
+
+    /// The `deserialize` fuzzer on a Sign profile (23-bit) must trip the
+    /// planted signature-unpacker bugs.
+    #[test]
+    fn fuzz_sign_unpacker_finds_planted_bugs() {
+        let m = mock();
+        let profile = profiles::get("dilithium3").unwrap();
+        let mut fe = fuzz::FuzzEngine::new(
+            &m, profile, fuzz::Surface::Deserialize, Some("sig_unpack_vuln"),
+            -1, 1, &crash_dir("sig"), 1.0, None, None, None, false,
+        ).unwrap();
+        fe.step(800);
+        assert!(fe.snapshot().crashes > 0, "fuzzer found no crash in sig_unpack_vuln");
+    }
+
+    /// TVLA `--op verify` must flag the leaky detached verify.
+    #[test]
+    fn verify_tvla_flags_leak() {
+        let m = mock();
+        let profile = profiles::get("dilithium3").unwrap();
+        let mut te = tvla::TvlaEngine::new(
+            &m, profile, tvla::Op::Verify, Some("crypto_sign_verify"), -1, 100_000, 1,
+        ).unwrap();
+        te.prime(2000);
+        te.step(20_000);
+        assert_eq!(te.snapshot().verdict, tvla::Verdict::Leak, "TVLA did not flag crypto_sign_verify");
     }
 }
