@@ -64,6 +64,22 @@ python -m latticescope tvla \
     --mode fixed-random --iterations 40000
 ```
 
+### Module 1 — ML-DSA signature-verify timing leak
+
+```bash
+python -m latticescope sign-tvla \
+    --lib demo/libvuln_dsa.so --param ml-dsa-65 \
+    --mode fixed-invalid --stop-on-leak
+```
+
+Class A is a fixed *invalid* signature (verify takes the reject path); Class B
+is fresh *valid* signatures minted by the target's own signer. This probes
+whether the reject path is constant-time relative to accept — the shape of a
+non-constant-time ML-DSA verify (e.g. a rejection-sampling / hint-decode early
+abort). Build the demo target with `cc -O2 -fPIC -shared demo/vuln_dsa.c -o
+demo/libvuln_dsa.so`. Auditing a real target works exactly like `tvla`, with
+`--sym-verify/--sym-keypair/--sym-sign` for non-standard symbol names.
+
 ### Module 2 — structure-aware fuzzer
 
 Ciphertext surface:
@@ -287,7 +303,8 @@ latticescope/
   ui.py          rich live UIs with plain-text fallbacks
   selftest.py    builds demo and drives both modules end-to-end
 demo/
-  vuln_kem.c     intentionally-flawed demonstration target
+  vuln_kem.c     intentionally-flawed ML-KEM demonstration target
+  vuln_dsa.c     intentionally-flawed ML-DSA verify target (timing leak)
   build_demo.sh  build script for the demo
 ```
 
@@ -300,11 +317,14 @@ Honest gaps:
   `nonstop_tsc` CPUID bits, so a hypervisor that scales or traps the counter
   (common on cloud VMs) can silently produce untrustworthy `|t|` values with
   no warning.
-- **ML-DSA / signature timing is scaffolded, not wired up.** `SignTarget`,
-  `SignParams`, `SIGN_SETS`, and `ct_time_verify` exist in the codebase, but
-  there is no `sign-tvla` (or equivalent) CLI subcommand — signature
-  verification timing (e.g. Dilithium rejection-sampling leaks) can't
-  actually be audited yet despite the module docstrings mentioning it.
+- **ML-DSA `sign-tvla` `fixed-random` mode is limited by deterministic
+  signing.** Signature verification timing *is* now auditable via the
+  `sign-tvla` subcommand (fixed-invalid vs. fixed-random, mirroring the KEM
+  path). But FIPS 204's default signing is deterministic, so `fixed-random`
+  Class B produces identical signature bytes and only surfaces leakage that
+  does not depend on the signature varying — the meaningful, default mode for
+  a verify path is `fixed-invalid` (reject path vs. accept path). Fuzzing of
+  the ML-DSA parsing surface is still not implemented.
 - **The fuzzer is structure-aware, not coverage-guided.** Mutation strategies
   round-robin with no feedback from what code the target actually executed —
   no seed-corpus growth, no notion of "this input reached a new path." It's

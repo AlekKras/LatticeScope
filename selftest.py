@@ -9,9 +9,12 @@ ABI and two planted bugs), then:
      crosses the leak threshold (the planted non-constant-time rejection path);
   2. runs the structure-aware fuzzer on the ciphertext surface and checks that
      it catches a memory fault (the planted out-of-bounds read on the reject
-     path) and writes a crash artifact.
+     path) and writes a crash artifact;
+  3. builds demo/vuln_dsa.c (an ML-DSA-65 verify stand-in with a planted
+     non-constant-time reject path) and runs the signature-timing module,
+     checking that Welch's t crosses the leak threshold.
 
-Exit code: 0 if BOTH detections fire as expected (the tools work), 1 otherwise.
+Exit code: 0 if ALL detections fire as expected (the tools work), 1 otherwise.
 Note this is the opposite polarity to the `tvla` / `fuzz-lattice` subcommands,
 where a *finding* returns 2 -- here, finding the planted bugs is success.
 """
@@ -26,17 +29,18 @@ from pathlib import Path
 from typing import Optional
 
 
-def _find_demo_source() -> Optional[Path]:
-    """Locate demo/vuln_kem.c relative to the installed tree or CWD."""
-    env = os.environ.get("LATTICESCOPE_DEMO_SRC")
-    if env and Path(env).is_file():
-        return Path(env)
+def _find_demo_source(filename: str = "vuln_kem.c") -> Optional[Path]:
+    """Locate a demo source (e.g. vuln_kem.c / vuln_dsa.c) near the tree/CWD."""
+    if filename == "vuln_kem.c":
+        env = os.environ.get("LATTICESCOPE_DEMO_SRC")
+        if env and Path(env).is_file():
+            return Path(env)
     pkg = Path(__file__).resolve().parent
     candidates = [
-        pkg.parent / "demo" / "vuln_kem.c",       # <root>/demo alongside package
-        pkg / "demo" / "vuln_kem.c",               # bundled inside package
-        Path.cwd() / "demo" / "vuln_kem.c",
-        pkg.parent.parent / "demo" / "vuln_kem.c",
+        pkg.parent / "demo" / filename,       # <root>/demo alongside package
+        pkg / "demo" / filename,               # bundled inside package
+        Path.cwd() / "demo" / filename,
+        pkg.parent.parent / "demo" / filename,
     ]
     for c in candidates:
         if c.is_file():
@@ -46,7 +50,7 @@ def _find_demo_source() -> Optional[Path]:
 
 def _build_demo(src: Path, workdir: Path) -> Path:
     """Compile the demo target into workdir and return the .so path."""
-    so = workdir / "libvuln_kem.so"
+    so = workdir / f"lib{src.stem}.so"
     cc = os.environ.get("CC", "cc")
     cmd = [cc, "-O2", "-fPIC", "-shared", "-Wall", str(src), "-o", str(so)]
     proc = subprocess.run(cmd, capture_output=True, text=True)
@@ -66,9 +70,9 @@ def _section(title: str) -> None:
 
 def run_selftest(iterations: int = 500_000,
                  fuzz_iterations: int = 50_000) -> int:
-    from .lattice import KEM_SETS
-    from .target import KemTarget
-    from .tvla import KemLeakageTest, TvlaConfig
+    from .lattice import KEM_SETS, SIGN_SETS
+    from .target import KemTarget, SignTarget
+    from .tvla import KemLeakageTest, SignLeakageTest, TvlaConfig
     from .fuzz import FuzzConfig, LatticeFuzzer
     from .ui import run_tvla_ui, run_fuzz_ui
 
@@ -136,11 +140,41 @@ def run_selftest(iterations: int = 500_000,
         print(f"\nRESULT: no crash found in {fuzz_iterations:,} cases — "
               f"UNEXPECTED. Try a larger --fuzz-iterations.")
 
+    # -- Module 1 (signatures): ML-DSA verify timing ---------------------
+    _section("MODULE 1 (ML-DSA) — verify timing leakage (expect: LEAK on reject path)")
+    sign_ok = False
+    dsa_src = _find_demo_source("vuln_dsa.c")
+    if dsa_src is None:
+        print("error: could not locate demo/vuln_dsa.c — cannot run the ML-DSA "
+              "verify-timing check.", file=sys.stderr)
+    else:
+        try:
+            dsa_lib = _build_demo(dsa_src, tmp)
+            print(f"built       : {dsa_lib}")
+            sparams = SIGN_SETS["ml-dsa-65"]
+            sign_target = SignTarget(str(dsa_lib), sparams)
+            sign_cfg = TvlaConfig(mode="fixed-invalid", max_iterations=iterations,
+                                  threshold=4.5, stop_on_leak=True)
+            sign_test = SignLeakageTest(sign_target, sign_cfg)
+            sign_final = run_tvla_ui(sign_test, sign_cfg, sign_target)
+            if sign_final is not None and sign_final.leaking:
+                sign_ok = True
+                print(f"\nRESULT: LEAK DETECTED  max|t|={sign_final.max_abs_t:.2f} "
+                      f"> {sign_cfg.threshold}  Δ={sign_final.diff:+.1f} cyc  "
+                      f"p={sign_final.p_value:.1e}  (as expected)")
+            else:
+                mt = sign_final.max_abs_t if sign_final else float("nan")
+                print(f"\nRESULT: no leak flagged (max|t|={mt:.2f}) — UNEXPECTED. "
+                      f"Try a larger --iterations or a quieter core.")
+        except (OSError, AttributeError, RuntimeError) as e:
+            print(f"error: ML-DSA verify-timing check failed: {e}", file=sys.stderr)
+
     # -- Summary ----------------------------------------------------------
     _section("SELF-TEST SUMMARY")
-    print(f"  TVLA  leak detection : {'PASS' if tvla_ok else 'FAIL'}")
-    print(f"  Fuzz  crash detection: {'PASS' if fuzz_ok else 'FAIL'}")
-    ok = tvla_ok and fuzz_ok
-    print(f"\n  overall: {'PASS — both modules behaved as designed' if ok else 'FAIL'}")
+    print(f"  TVLA  leak  detection (KEM) : {'PASS' if tvla_ok else 'FAIL'}")
+    print(f"  Fuzz  crash detection (KEM) : {'PASS' if fuzz_ok else 'FAIL'}")
+    print(f"  TVLA  leak  detection (DSA) : {'PASS' if sign_ok else 'FAIL'}")
+    ok = tvla_ok and fuzz_ok and sign_ok
+    print(f"\n  overall: {'PASS — all modules behaved as designed' if ok else 'FAIL'}")
     print(f"  (artifacts left in {tmp})")
     return 0 if ok else 1

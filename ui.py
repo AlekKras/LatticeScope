@@ -50,7 +50,7 @@ def _tvla_render(target, cfg, snap):
     head.add_column(justify="left")
     head.add_column(justify="left")
     head.add_row(f"[bold]target[/bold] {target.params.name}",
-                 f"[bold]dec symbol[/bold] {target.dec_name}")
+                 f"[bold]probe symbol[/bold] {target.probe_name}")
     head.add_row(f"[bold]mode[/bold] {cfg.mode}",
                  f"[bold]threshold[/bold] |t| > {thr}")
     core_desc = snap.pinned_core if snap.pinned_core is not None else "unpinned"
@@ -119,7 +119,7 @@ def run_tvla_ui(test, cfg, target):
 
 
 def _run_tvla_plain(test, cfg, target):
-    print(f"[TVLA] target={target.params.name} dec={target.dec_name} "
+    print(f"[TVLA] target={target.params.name} probe={target.probe_name} "
           f"mode={cfg.mode} threshold=|t|>{cfg.threshold}")
     final = None
     last = 0.0

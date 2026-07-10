@@ -4,6 +4,7 @@ cli.py -- LatticeScope command-line entry point.
 Subcommands
 -----------
   tvla          Test Vector Leakage Assessment on ML-KEM decapsulation.
+  sign-tvla     Test Vector Leakage Assessment on ML-DSA signature verify.
   fuzz-lattice  Structure-aware algebraic/NTT fuzzer for ML-KEM (dec surface)
                 or a named leaf function (poly surface).
   selftest      Build the bundled intentionally-flawed demo target and run both
@@ -19,7 +20,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from .lattice import KEM_SETS
+from .lattice import KEM_SETS, SIGN_SETS
 
 
 def _add_common_target(sp):
@@ -68,6 +69,43 @@ def build_parser() -> argparse.ArgumentParser:
                    help="halt as soon as |t| crosses the threshold")
     t.add_argument("--seed", type=int, default=None,
                    help="deterministic class-scheduling seed")
+
+    # -- sign-tvla -------------------------------------------------------
+    st = sub.add_parser("sign-tvla",
+                        help="TVLA timing leakage on ML-DSA signature verify")
+    st.add_argument("--lib", required=True,
+                    help="path to the target shared object (.so)")
+    st.add_argument("--param", default="ml-dsa-65", choices=sorted(SIGN_SETS),
+                    help="ML-DSA parameter set (default: ml-dsa-65)")
+    st.add_argument("--sym-verify", default=None,
+                    help="explicit crypto_sign_verify symbol name")
+    st.add_argument("--sym-keypair", default=None,
+                    help="explicit crypto_sign_keypair symbol name")
+    st.add_argument("--sym-sign", default=None,
+                    help="explicit crypto_sign_signature symbol name")
+    st.add_argument("--mode", default="fixed-invalid",
+                    choices=["fixed-invalid", "fixed-random"],
+                    help="class split (default: fixed-invalid)")
+    st.add_argument("--iterations", type=int, default=2_000_000,
+                    help="max verifications to measure")
+    st.add_argument("--batch", type=int, default=1024,
+                    help="measurements per C timing call")
+    st.add_argument("--warmup", type=int, default=64,
+                    help="untimed calls before each batch")
+    st.add_argument("--threshold", type=float, default=4.5,
+                    help="|t| flag threshold (default: 4.5)")
+    st.add_argument("--crop-pct", type=float, default=99.5,
+                    help="drop cycle samples above this percentile")
+    st.add_argument("--no-crop", action="store_true",
+                    help="disable outlier cropping")
+    st.add_argument("--core", type=int, default=None,
+                    help="CPU core to pin to (default: highest available)")
+    st.add_argument("--rerandomize-invalid", action="store_true",
+                    help="use fresh invalid signatures for class A each time")
+    st.add_argument("--stop-on-leak", action="store_true",
+                    help="halt as soon as |t| crosses the threshold")
+    st.add_argument("--seed", type=int, default=None,
+                    help="deterministic class-scheduling seed")
 
     # -- fuzz-lattice ----------------------------------------------------
     f = sub.add_parser("fuzz-lattice",
@@ -128,6 +166,27 @@ def _run_tvla(args) -> int:
     return 2 if (final and final.leaking) else 0
 
 
+def _run_sign_tvla(args) -> int:
+    from .lattice import SIGN_SETS
+    from .target import SignTarget
+    from .tvla import SignLeakageTest, TvlaConfig
+    from .ui import run_tvla_ui
+
+    target = SignTarget(args.lib, SIGN_SETS[args.param],
+                        verify_sym=args.sym_verify,
+                        keypair_sym=args.sym_keypair,
+                        sign_sym=args.sym_sign)
+    cfg = TvlaConfig(
+        mode=args.mode, max_iterations=args.iterations, batch=args.batch,
+        warmup=args.warmup, threshold=args.threshold,
+        crop_percentile=args.crop_pct, crop_enabled=not args.no_crop,
+        core=args.core, rerandomize_invalid=args.rerandomize_invalid,
+        stop_on_leak=args.stop_on_leak, seed=args.seed)
+    test = SignLeakageTest(target, cfg)
+    final = run_tvla_ui(test, cfg, target)
+    return 2 if (final and final.leaking) else 0
+
+
 def _run_fuzz(args) -> int:
     from .lattice import KEM_SETS
     from .target import KemTarget
@@ -168,6 +227,8 @@ def main(argv=None) -> int:
     try:
         if args.cmd == "tvla":
             return _run_tvla(args)
+        if args.cmd == "sign-tvla":
+            return _run_sign_tvla(args)
         if args.cmd == "fuzz-lattice":
             return _run_fuzz(args)
         if args.cmd == "selftest":
