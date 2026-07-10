@@ -19,9 +19,9 @@ Two modules:
 | Timing-leakage detection | `tvla` | A dudect/TVLA fixed-vs-random Welch t-test over the cycle counter. Flags input-dependent timing. |
 | Structure-aware fuzzing | `fuzz-lattice` | Emits *structurally valid* lattice coefficient vectors and pushes them onto reduction/NTT/signed-wrap boundaries, each execution isolated in a forked child. |
 
-This is a from-scratch Rust reimplementation of an earlier Python+C version.
-The rewrite exists to fix three issues that stood between the tool and
-real-world use (see [Why Write in Rust if Py would do](#why-write-in-rust-if-py-would-do)).
+This is a from-scratch Rust reimplementation of an earlier Python+C version
+(the one in this repository's root). It makes three deliberate changes over
+that version (see [Why Write in Rust if Py would do](#why-write-in-rust-if-py-would-do)).
 
 ## Build
 
@@ -256,29 +256,38 @@ backend runs a call was never part of what determines its outcome.
 
 ## Why Write in Rust if Py would do
 
-1. **The cropped-t statistic no longer over-claims.** The Python version
-   computed the t-test at eight percentile crops and reported the maximum `|t|`
-   while still advertising a per-test `p < 1e-5` guarantee — a
-   multiple-comparison procedure sold as a calibrated one, biased toward false
-   LEAK. Here the raw whole-stream Welch t is the calibrated primary; tail
-   cropping is reduced to a small fixed set and reported separately as an
-   explicitly-uncalibrated sensitivity figure. (You can watch this work in the
-   `demo`: the constant-time control's tail-robust t sits slightly above its raw
-   t but nowhere near the threshold.)
+Three things this version does differently from the Python+C original in this
+repository's root:
 
-2. **The fork/timeout race is gone.** The Python version armed a `SIGALRM`
-   handler that raised to interrupt `waitpid`; if a child exited within a hair
-   of the deadline, the alarm could fire after the wait returned but before the
-   timer was disarmed, and the stray signal escaped. This version blocks
-   `SIGCHLD` up front and waits on it with `sigtimedwait`. A child that dies
-   before we wait leaves the signal *pending* rather than lost; there is no
-   handler and no timer to disarm, so there is no race.
+1. **The tail-cropped statistic is kept separate from the calibrated one.** The
+   Python version reports a single Welch t computed over the stream after one
+   upper-tail crop (default 99.5th percentile, `--crop-pct`) and judges that
+   value against the 4.5 line. Here the calibrated primary is `t(raw)`, the
+   Welch t over the *whole, uncropped* stream — for a single test at TVLA sample
+   sizes `|t| > 4.5` corresponds to a two-sided false-positive probability on
+   the order of `1e-5`. Tail cropping is a separate, small fixed set of crops
+   surfaced as `t(robust)` and reported as an explicitly-uncalibrated
+   sensitivity figure, not a `1e-5` gate. (In the `demo`, the constant-time
+   control stays well under the threshold on both statistics.)
 
-3. **Honest nomenclature.** The counter unit reads `cycles (TSC)` because RDTSC
-   reads the invariant TSC — reference cycles at the nominal base frequency, not
-   core clocks under turbo/throttle (exactly what a differential test wants).
-   What the Python version mislabelled a "reservoir" is a recency **window**,
-   and is named that.
+2. **The timeout is enforced by the parent, not delegated to the child.** In
+   the Python version each forked child arms its own `setitimer(ITIMER_REAL)`
+   and the parent blocks in a plain `waitpid` with no deadline of its own — a
+   hang is caught only when the child's `SIGALRM` fires and terminates it. Here
+   the parent owns the deadline: it blocks `SIGCHLD` process-wide up front and
+   waits with `sigtimedwait` (Linux) or a `waitpid(WNOHANG)` poll (elsewhere),
+   `SIGKILL`ing the child on timeout. A child that dies before we wait leaves
+   `SIGCHLD` *pending* rather than lost, and there is no signal handler to
+   install or disarm.
+
+3. **Counter nomenclature stays honest about what is counted.** On x86_64 the
+   unit reads `cycles (TSC)` because `RDTSC` reads the invariant TSC — reference
+   cycles at the nominal base frequency, not core clocks under turbo/throttle
+   (exactly what a differential test wants); on aarch64 it reads
+   `ticks (CNTVCT)` rather than pretending to be core cycles. The bounded buffer
+   feeding the cropped statistic is a recency **window** (`TailWindow`), not
+   reservoir sampling — the raw statistic already covers the full stream in flat
+   memory.
 
 Rust also removes a class of problems structurally: there is no ctypes boundary
 inside the timed window, integer-wrap semantics in the mutators are explicit
@@ -307,6 +316,12 @@ cargo run --release -- fuzz-lattice --target ./libmlkem768_pqclean.so --profile 
     --surface deserialize --symbol PQCLEAN_MLKEM768_CLEAN_poly_frombytes \
     --in-len 384 --out-len 512
 ```
+
+The `t` values below are illustrative output from a single run; the host and
+pinning state were not recorded, exact figures are host- and run-dependent, and
+they are **not committed as artifacts** (the PQClean `.so`s are fetched by
+`make pqclean`, not checked in). Reproduce with the commands above — the actual
+claim is the *verdict* (**clean** vs **flagged**), not the specific number.
 
 | Test | Symbol | Result |
 | --- | --- | --- |

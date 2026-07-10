@@ -1,6 +1,6 @@
 # Demo guide
 
-This is created for the demo portion of DEFCON34 presentation. This project includes a bundled demo target that is intentionally flawed so you can try both detectors without needing your own library.
+This is intended for the demo portion of a DEF CON 34 presentation. This project includes a bundled demo target that is intentionally flawed so you can try both detectors without needing your own library.
 
 ## 1. Create and activate a virtual environment
 

@@ -2,7 +2,7 @@
 //!
 //! Each execution runs in a forked child so a memory-safety or arithmetic fault
 //! kills only that child; the parent detects it through the reaper's
-//! `sigtimedwait` path (see `sys::Reaper`). Coefficients and the packed payload
+//! fork/timeout path (see `sys::Reaper`). Coefficients and the packed payload
 //! are prepared in the parent *before* the fork, so the child does exactly one
 //! indirect call into the target and then exits — and so a crash is fully
 //! reproducible from `(base_seed, exec_index)`.

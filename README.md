@@ -42,9 +42,11 @@ project is verified with the commands below.
 python -m latticescope selftest
 ```
 
-This compiles [demo/vuln_kem.c](demo/vuln_kem.c) into a shared library and runs
-both modules against it. The self-test should report a TVLA leak and a fuzzing
-crash, exiting successfully when both planted bugs are detected.
+This compiles the demo targets [demo/vuln_kem.c](demo/vuln_kem.c) and
+[demo/vuln_dsa.c](demo/vuln_dsa.c) into shared libraries and runs both modules
+against them. The self-test should report a KEM decapsulation timing leak, a
+fuzzing crash, and an ML-DSA verify timing leak, exiting successfully only when
+all three planted bugs are detected.
 
 ## Live demo commands
 
@@ -271,7 +273,7 @@ On any unique crash the tool exits `2`.
 
 | Code | Meaning |
 |------|---------|
-| `0`  | Ran clean. For `tvla`/`fuzz-lattice`: no finding. For `selftest`: both planted bugs were detected (success). |
+| `0`  | Ran clean. For `tvla`/`fuzz-lattice`: no finding. For `selftest`: all three planted bugs were detected (success). |
 | `2`  | A finding: `tvla` crossed the threshold, or `fuzz-lattice` recorded a unique crash. Useful as a CI gate. |
 | `1`  | Usage / setup error (bad symbol, missing leaf args, demo source not found, compile failure). |
 
@@ -296,7 +298,7 @@ memory bug — only the fork-isolated fuzzer does. Build it standalone with
 
 ```
 latticescope/
-  cli.py         argparse front end (tvla | fuzz-lattice | selftest)
+  cli.py         argparse front end (tvla | sign-tvla | fuzz-lattice | selftest)
   target.py      ctypes binding of the target (symbol resolution, wrappers)
   cshim.c        timing counter and batched timing loops
   build_shim.py  runtime compiler + cache for the timing shim
