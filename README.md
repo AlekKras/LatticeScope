@@ -148,10 +148,16 @@ structure-preserving mutations.
 **Method.** Inputs are split into two classes and each is timed under identical
 conditions, **interleaved within every batch** so slow drift (thermal,
 frequency) hits both classes equally and cancels in the difference. A streaming
-Welch's *t*-test tracks divergence; `|t| > 4.5` is the conventional flag for a
-first-order, data-dependent (i.e. potentially exploitable) timing leak. The
-tight loop lives in C (`cshim.ct_time_dec`) to keep CPython jitter out of the
-signal.
+Welch's *t*-test tracks divergence. The **verdict** is the *full-stream* `|t|`
+at the final iteration count crossing `4.5` — a single-look test whose
+two-sided false-positive probability is on the order of `1e-5`. The **peak**
+`max|t|` reached along the way is reported too, but only as an *uncalibrated
+sensitivity* figure: gating on the running max would be optional-stopping
+(peeking), which inflates the false-positive rate well past `1e-5`, since the
+cumulative `t` is ~`N(0,1)` at every `n` and its supremum over a long run
+crosses `4.5` routinely even under the null. A peak that later settles back
+under the line is a cue to re-run pinned/quiesced, not a leak. The tight loop
+lives in C (`cshim.ct_time_dec`) to keep CPython jitter out of the signal.
 
 **Classes.**
 

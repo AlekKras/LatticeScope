@@ -44,7 +44,8 @@ def _bar(value: float, vmax: float, width: int, char: str = "█") -> str:
 
 def _tvla_render(target, cfg, snap, unit):
     thr = cfg.threshold
-    color = "bright_red" if snap.leaking else ("yellow" if snap.max_abs_t > thr * 0.6 else "bright_green")
+    cur = abs(snap.t)   # calibrated full-stream statistic drives the verdict
+    color = "bright_red" if snap.leaking else ("yellow" if cur > thr * 0.6 else "bright_green")
 
     head = Table.grid(padding=(0, 2))
     head.add_column(justify="left")
@@ -61,8 +62,8 @@ def _tvla_render(target, cfg, snap, unit):
     stats.add_column("value", justify="right")
     stats.add_row("iterations", f"{snap.iterations:,}")
     stats.add_row("exec/s", f"{snap.exec_per_s:,.0f}")
-    stats.add_row("t (current)", f"[{color}]{snap.t:+.3f}[/{color}]")
-    stats.add_row("max |t|", f"[{color}]{snap.max_abs_t:.3f}[/{color}]")
+    stats.add_row("t (verdict)", f"[{color}]{snap.t:+.3f}[/{color}]")
+    stats.add_row("max |t| (peak, sensitivity)", f"{snap.max_abs_t:.3f}")
     stats.add_row("p-value", f"{snap.p_value:.2e}")
     stats.add_row(f"mean A / B ({unit})", f"{snap.mean_a:,.1f} / {snap.mean_b:,.1f}")
     stats.add_row(f"Δ mean ({unit})", f"{snap.diff:+.2f}")
@@ -74,14 +75,14 @@ def _tvla_render(target, cfg, snap, unit):
     # length past the marker isn't meaningful, so annotate the magnitude.
     # ponytail: fixed thr*4 scale, switch to log if sub-2x resolution matters.
     scale = thr * 4.0
-    tbar = _bar(snap.max_abs_t, scale, 40)
+    tbar = _bar(cur, scale, 40)
     marker_pos = int((thr / scale) * 40)  # == 10, i.e. one quarter in
     tbar = tbar[:marker_pos] + "|" + tbar[marker_pos + 1:]
-    over = snap.max_abs_t / thr if thr else 0.0
+    over = cur / thr if thr else 0.0
     tag = f"  {over:.1f}× over" if over >= 1.0 else ""
     graph = Table.grid()
     graph.add_column()
-    graph.add_row(Text(f"|t|  {tbar}  {snap.max_abs_t:6.2f}{tag}", style=color))
+    graph.add_row(Text(f"|t|  {tbar}  {cur:6.2f}{tag}", style=color))
     # Divergence view: mean cycles from a zero baseline, scaled to the larger
     # class. Equal means -> equal bars; a large gap -> full bar vs. a sliver.
     mmax = max(snap.mean_a, snap.mean_b, 1.0)
@@ -90,7 +91,7 @@ def _tvla_render(target, cfg, snap, unit):
 
     if snap.leaking:
         verdict = Panel(Align.center(Text(
-            f" LEAK DETECTED  |t| = {snap.max_abs_t:.2f} > {thr}  "
+            f" LEAK DETECTED  |t| = {cur:.2f} > {thr}  "
             f"(Δ = {snap.diff:+.2f} {unit}, p = {snap.p_value:.1e}) ",
             style="bold white on red")), box=box.HEAVY, style="red")
     else:
@@ -143,7 +144,8 @@ def _run_tvla_plain(test, cfg, target, unit):
                   f"Δ={snap.diff:+.2f} {unit}  p={snap.p_value:.1e}")
             last = now
         if snap.leaking:
-            print(f"  *** LEAK: max|t|={snap.max_abs_t:.2f} > {cfg.threshold} "
+            print(f"  *** LEAK: |t|={abs(snap.t):.2f} > {cfg.threshold} "
+                  f"(peak max|t|={snap.max_abs_t:.2f}) "
                   f"Δ={snap.diff:+.2f} {unit} CI95=[{snap.ci95[0]:+.2f},{snap.ci95[1]:+.2f}]")
             if cfg.stop_on_leak:
                 break

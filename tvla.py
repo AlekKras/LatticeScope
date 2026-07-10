@@ -6,9 +6,11 @@ Method
 We split inputs into two classes and time decapsulation of each under
 identical conditions, interleaving classes within every batch so that slow
 drift (thermal, frequency) affects both equally and cancels in the difference.
-A streaming Welch's t-test tracks the divergence; |t| > threshold (4.5 by
-convention) is the flag for a data-dependent, i.e. potentially exploitable,
-timing leak.
+A streaming Welch's t-test tracks the divergence. The calibrated verdict is the
+*full-stream* |t| at the final n crossing 4.5 (a single-look ~1e-5 gate); the
+running max of |t| over the trajectory is reported only as an uncalibrated
+sensitivity figure, since gating on it would be optional-stopping and inflate
+the false-positive rate.
 
 Class definitions (KEM decapsulation)
 -------------------------------------
@@ -176,7 +178,17 @@ class _StreamingLeakTest:
                 n_a=snap["n_a"],
                 n_b=snap["n_b"],
                 exec_per_s=done / elapsed,
-                leaking=max_abs_t > self.cfg.threshold,
+                # Calibrated verdict: the full-stream Welch t at the current n,
+                # NOT the running max. |t| > 4.5 is a *single-look* ~1e-5 gate;
+                # re-checking it every batch and flagging on the trajectory's
+                # peak is optional-stopping (peeking), which drives the
+                # false-positive rate far above 1e-5 on a genuinely constant-
+                # time target -- the cumulative t is ~N(0,1) at every n, so its
+                # supremum over a long run crosses 4.5 routinely under H0.
+                # max_abs_t is still reported (below) as an uncalibrated
+                # sensitivity figure: a peak that later settles is a hint to
+                # re-run pinned/quiesced, not a leak verdict.
+                leaking=abs(t) > self.cfg.threshold,
                 pinned_core=pinned_core,
             )
 
@@ -328,3 +340,52 @@ class _SeededRng:
         self._r = random.Random(seed)
     def random(self) -> float:
         return self._r.random()
+
+
+if __name__ == "__main__":
+    # Self-check for the calibrated verdict: a stream whose cumulative |t|
+    # spikes far above the threshold early and then settles back to ~0 must NOT
+    # be flagged as leaking at the end. This is the H0 optional-stopping trap --
+    # if the verdict ever reverts to gating on the running max (peeking) instead
+    # of the full-stream t, this assertion fails.
+    class _Scripted(_StreamingLeakTest):
+        def __init__(self, batches):
+            self._batches = batches
+            self._i = 0
+            self.cfg = TvlaConfig(batch=len(batches[0][0]),
+                                  max_iterations=sum(len(l) for l, _ in batches),
+                                  crop_enabled=False, threshold=4.5)
+            self.welch = WelchTest()
+            self._crop_thr = float("inf")
+            self._crop_samples = []
+
+        def _measure_batch(self, n):
+            labels, cycles = self._batches[self._i]
+            self._i += 1
+            return labels, cycles
+
+    def _batch(a_mean, b_mean):
+        # 100 class-A then 100 class-B samples, each ±1 so variance is nonzero.
+        labels = bytearray(200)
+        cycles = [0] * 200
+        for i in range(200):
+            jitter = 1 if i % 2 else -1
+            if i < 100:
+                labels[i] = 1
+                cycles[i] = a_mean + jitter
+            else:
+                labels[i] = 0
+                cycles[i] = b_mean + jitter
+        return labels, cycles
+
+    # Batch 1: A slow / B fast (t spikes high). Batch 2: the exact opposite, so
+    # both classes end symmetric -> full-stream diff and t collapse to 0.
+    scripted = _Scripted([_batch(110, 90), _batch(90, 110)])
+    snaps = list(scripted.run())
+    peak = max(s.max_abs_t for s in snaps)
+    final = snaps[-1]
+    assert peak > 4.5, f"expected an early transient crossing, peak={peak:.2f}"
+    assert abs(final.t) < 4.5, f"final |t| should settle, got {final.t:.2f}"
+    assert not final.leaking, "calibrated verdict must not flag a settled stream"
+    print(f"tvla.py verdict self-check OK  (peak max|t|={peak:.1f} crossed, "
+          f"final |t|={abs(final.t):.2f} < 4.5 -> clean)")

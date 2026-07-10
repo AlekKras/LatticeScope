@@ -113,7 +113,7 @@ def run_selftest(iterations: int = 500_000,
     tvla_final = run_tvla_ui(tvla_test, tvla_cfg, target)
     if tvla_final is not None and tvla_final.leaking:
         tvla_ok = True
-        print(f"\nRESULT: LEAK DETECTED  max|t|={tvla_final.max_abs_t:.2f} "
+        print(f"\nRESULT: LEAK DETECTED  |t|={abs(tvla_final.t):.2f} "
               f"> {tvla_cfg.threshold}  Δ={tvla_final.diff:+.1f} {unit}  "
               f"p={tvla_final.p_value:.1e}  (as expected)")
     else:
@@ -162,7 +162,7 @@ def run_selftest(iterations: int = 500_000,
             sign_final = run_tvla_ui(sign_test, sign_cfg, sign_target)
             if sign_final is not None and sign_final.leaking:
                 sign_ok = True
-                print(f"\nRESULT: LEAK DETECTED  max|t|={sign_final.max_abs_t:.2f} "
+                print(f"\nRESULT: LEAK DETECTED  |t|={abs(sign_final.t):.2f} "
                       f"> {sign_cfg.threshold}  Δ={sign_final.diff:+.1f} {unit}  "
                       f"p={sign_final.p_value:.1e}  (as expected)")
             else:
