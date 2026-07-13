@@ -152,6 +152,7 @@ class SignParams:
     l: int
     sig_bytes: int
     pk_bytes: int
+    sk_bytes: int
     n: int = MLDSA_N
     q: int = MLDSA_Q
 
@@ -164,9 +165,9 @@ KEM_SETS = {
 }
 
 SIGN_SETS = {
-    "ml-dsa-44": SignParams("ml-dsa-44", k=4, l=4, sig_bytes=2420, pk_bytes=1312),
-    "ml-dsa-65": SignParams("ml-dsa-65", k=6, l=5, sig_bytes=3309, pk_bytes=1952),
-    "ml-dsa-87": SignParams("ml-dsa-87", k=8, l=7, sig_bytes=4627, pk_bytes=2592),
+    "ml-dsa-44": SignParams("ml-dsa-44", k=4, l=4, sig_bytes=2420, pk_bytes=1312, sk_bytes=2560),
+    "ml-dsa-65": SignParams("ml-dsa-65", k=6, l=5, sig_bytes=3309, pk_bytes=1952, sk_bytes=4032),
+    "ml-dsa-87": SignParams("ml-dsa-87", k=8, l=7, sig_bytes=4627, pk_bytes=2592, sk_bytes=4896),
 }
 
 

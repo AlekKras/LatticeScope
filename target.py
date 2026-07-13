@@ -106,6 +106,11 @@ class KemTarget:
     def dec_addr(self) -> int:
         return ctypes.cast(self._dec, ctypes.c_void_p).value
 
+    @property
+    def probe_name(self) -> str:
+        """Symbol the timing test probes (for UI labelling)."""
+        return self.dec_name
+
     # -- Python-callable wrappers ---------------------------------------
     def keypair(self) -> Tuple[bytes, bytes]:
         pk, sk = _buf(self.pk_len), _buf(self.sk_len)
@@ -139,10 +144,19 @@ class KemTarget:
 
 
 class SignTarget:
-    """Bound ML-DSA implementation (verify path only, for timing probes)."""
+    """Bound ML-DSA implementation.
+
+    Binds the detached-signature ABI: `crypto_sign_verify` (the function the
+    timing test probes) plus `crypto_sign_keypair` and `crypto_sign_signature`,
+    so the tool can mint *valid* signatures from the target itself -- exactly
+    as KemTarget mints valid ciphertexts via enc -- rather than reimplementing
+    ML-DSA to get a baseline.
+    """
 
     def __init__(self, lib_path: str, params: SignParams,
-                 verify_sym: Optional[str] = None):
+                 verify_sym: Optional[str] = None,
+                 keypair_sym: Optional[str] = None,
+                 sign_sym: Optional[str] = None):
         self.params = params
         self.lib = ctypes.CDLL(lib_path)
         n = params.name.replace("ml-dsa-", "")
@@ -151,18 +165,56 @@ class SignTarget:
             ["crypto_sign_verify",
              f"pqcrystals_dilithium{n}_ref_verify",
              f"PQCLEAN_MLDSA{n}_CLEAN_crypto_sign_verify"])
+        self._keypair, self.keypair_name = _find_symbol(
+            self.lib, keypair_sym,
+            ["crypto_sign_keypair",
+             f"pqcrystals_dilithium{n}_ref_keypair",
+             f"PQCLEAN_MLDSA{n}_CLEAN_crypto_sign_keypair"])
+        self._sign, self.sign_name = _find_symbol(
+            self.lib, sign_sym,
+            ["crypto_sign_signature",
+             f"pqcrystals_dilithium{n}_ref_signature",
+             f"PQCLEAN_MLDSA{n}_CLEAN_crypto_sign_signature"])
+
         self._verify.restype = ctypes.c_int
         self._verify.argtypes = [u8p, ctypes.c_size_t, u8p,
                                  ctypes.c_size_t, u8p]
+        self._keypair.restype = ctypes.c_int
+        self._keypair.argtypes = [u8p, u8p]
+        self._sign.restype = ctypes.c_int
+        self._sign.argtypes = [u8p, ctypes.POINTER(ctypes.c_size_t),
+                               u8p, ctypes.c_size_t, u8p]
 
     @property
     def sig_len(self) -> int: return self.params.sig_bytes
     @property
     def pk_len(self) -> int: return self.params.pk_bytes
+    @property
+    def sk_len(self) -> int: return self.params.sk_bytes
 
     @property
     def verify_addr(self) -> int:
         return ctypes.cast(self._verify, ctypes.c_void_p).value
+
+    @property
+    def probe_name(self) -> str:
+        """Symbol the timing test probes (for UI labelling)."""
+        return self.verify_name
+
+    def keypair(self) -> Tuple[bytes, bytes]:
+        pk, sk = _buf(self.pk_len), _buf(self.sk_len)
+        self._keypair(pk, sk)
+        return bytes(pk), bytes(sk)
+
+    def sign(self, m: bytes, sk: bytes) -> bytes:
+        """Detached signature over m (SUPERCOP crypto_sign_signature). ML-DSA
+        signatures are fixed-length, so we return the full sig_len buffer."""
+        sig = _buf(self.sig_len)
+        siglen = ctypes.c_size_t(0)
+        m_buf = (u8 * len(m))(*m) if m else None
+        sk_buf = (u8 * self.sk_len)(*sk)
+        self._sign(sig, ctypes.byref(siglen), m_buf, len(m), sk_buf)
+        return bytes(sig)
 
     def verify(self, sig: bytes, m: bytes, pk: bytes) -> int:
         sig_buf = (u8 * len(sig))(*sig)

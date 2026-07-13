@@ -44,7 +44,7 @@ type KemEncFn = unsafe extern "C" fn(*mut u8, *mut u8, *const u8) -> c_int;
 type SignVerifyFn =
     unsafe extern "C" fn(*const u8, usize, *const u8, usize, *const u8) -> c_int;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Verdict {
     Collecting,
     CleanSoFar,

@@ -90,6 +90,9 @@ def load() -> ctypes.CDLL:
     lib.cs_arch_is_x86.restype = ctypes.c_int
     lib.cs_arch_is_x86.argtypes = []
 
+    lib.cs_counter_unit.restype = ctypes.c_char_p
+    lib.cs_counter_unit.argtypes = []
+
     lib.ct_time_dec.restype = ctypes.c_int
     lib.ct_time_dec.argtypes = [
         ctypes.c_void_p,  # fn
@@ -125,11 +128,17 @@ def load() -> ctypes.CDLL:
     return lib
 
 
+def counter_unit() -> str:
+    """Honest label for the per-arch counter (e.g. 'ns (mach)' on Apple)."""
+    return load().cs_counter_unit().decode()
+
+
 if __name__ == "__main__":
     lib = load()
     print("shim:", _cache_so_path().name)
     print("arch x86:", bool(lib.cs_arch_is_x86()))
-    print("counter read overhead (cycles):", lib.read_cycles_overhead())
+    print("counter unit:", counter_unit())
+    print("counter read overhead:", lib.read_cycles_overhead(), counter_unit())
     a = lib.read_cycles()
     b = lib.read_cycles()
     print("sample delta:", b - a)

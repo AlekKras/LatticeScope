@@ -42,9 +42,11 @@ project is verified with the commands below.
 python -m latticescope selftest
 ```
 
-This compiles [demo/vuln_kem.c](demo/vuln_kem.c) into a shared library and runs
-both modules against it. The self-test should report a TVLA leak and a fuzzing
-crash, exiting successfully when both planted bugs are detected.
+This compiles the demo targets [demo/vuln_kem.c](demo/vuln_kem.c) and
+[demo/vuln_dsa.c](demo/vuln_dsa.c) into shared libraries and runs both modules
+against them. The self-test should report a KEM decapsulation timing leak, a
+fuzzing crash, and an ML-DSA verify timing leak, exiting successfully only when
+all three planted bugs are detected.
 
 ## Live demo commands
 
@@ -63,6 +65,22 @@ python -m latticescope tvla \
     --lib demo/libvuln_kem.so --param ml-kem-768 \
     --mode fixed-random --iterations 40000
 ```
+
+### Module 1 — ML-DSA signature-verify timing leak
+
+```bash
+python -m latticescope sign-tvla \
+    --lib demo/libvuln_dsa.so --param ml-dsa-65 \
+    --mode fixed-invalid --stop-on-leak
+```
+
+Class A is a fixed *invalid* signature (verify takes the reject path); Class B
+is fresh *valid* signatures minted by the target's own signer. This probes
+whether the reject path is constant-time relative to accept — the shape of a
+non-constant-time ML-DSA verify (e.g. a rejection-sampling / hint-decode early
+abort). Build the demo target with `cc -O2 -fPIC -shared demo/vuln_dsa.c -o
+demo/libvuln_dsa.so`. Auditing a real target works exactly like `tvla`, with
+`--sym-verify/--sym-keypair/--sym-sign` for non-standard symbol names.
 
 ### Module 2 — structure-aware fuzzer
 
@@ -130,10 +148,16 @@ structure-preserving mutations.
 **Method.** Inputs are split into two classes and each is timed under identical
 conditions, **interleaved within every batch** so slow drift (thermal,
 frequency) hits both classes equally and cancels in the difference. A streaming
-Welch's *t*-test tracks divergence; `|t| > 4.5` is the conventional flag for a
-first-order, data-dependent (i.e. potentially exploitable) timing leak. The
-tight loop lives in C (`cshim.ct_time_dec`) to keep CPython jitter out of the
-signal.
+Welch's *t*-test tracks divergence. The **verdict** is the *full-stream* `|t|`
+at the final iteration count crossing `4.5` — a single-look test whose
+two-sided false-positive probability is on the order of `1e-5`. The **peak**
+`max|t|` reached along the way is reported too, but only as an *uncalibrated
+sensitivity* figure: gating on the running max would be optional-stopping
+(peeking), which inflates the false-positive rate well past `1e-5`, since the
+cumulative `t` is ~`N(0,1)` at every `n` and its supremum over a long run
+crosses `4.5` routinely even under the null. A peak that later settles back
+under the line is a cue to re-run pinned/quiesced, not a leak. The tight loop
+lives in C (`cshim.ct_time_dec`) to keep CPython jitter out of the signal.
 
 **Classes.**
 
@@ -167,6 +191,11 @@ results:
   branch shows up as a mean difference regardless — but do **not** read the raw
   numbers as core cycles. `read_cycles_overhead()` reports the counter's own
   read cost so you can sanity-check the noise floor.
+- **macOS is coarse.** On macOS (including Apple Silicon) there is no
+  userspace `CNTVCT_EL0` path, so the counter falls back to
+  `mach_absolute_time` and reports **nanoseconds**, not cycles — the UI labels
+  the unit accordingly. At ~1ns resolution, sub-microsecond leaks are not
+  resolvable there; prefer x86_64 Linux for fine-grained timing work.
 - **Sample enough.** `|t|` grows with `sqrt(n)`; a genuinely constant-time
   implementation should keep `|t|` bounded as iterations climb, while a leak
   diverges. Watch the trend, not a single snapshot. Use `--iterations` to cap
@@ -250,7 +279,7 @@ On any unique crash the tool exits `2`.
 
 | Code | Meaning |
 |------|---------|
-| `0`  | Ran clean. For `tvla`/`fuzz-lattice`: no finding. For `selftest`: both planted bugs were detected (success). |
+| `0`  | Ran clean. For `tvla`/`fuzz-lattice`: no finding. For `selftest`: all three planted bugs were detected (success). |
 | `2`  | A finding: `tvla` crossed the threshold, or `fuzz-lattice` recorded a unique crash. Useful as a CI gate. |
 | `1`  | Usage / setup error (bad symbol, missing leaf args, demo source not found, compile failure). |
 
@@ -271,11 +300,20 @@ Valid ciphertexts take the accept branch, so the timing test never trips the
 memory bug — only the fork-isolated fuzzer does. Build it standalone with
 `demo/build_demo.sh`.
 
+> **The planted leak is deliberately gross.** The reject branch adds tens of
+> thousands of loop iterations (~15µs, `|t|` in the hundreds) so it fires
+> reliably on *any* counter — including the coarse macOS nanosecond timer. That
+> magnitude is a demo convenience, **not** a measure of the tool's real
+> sensitivity. Catching a realistic single-digit-cycle leak needs an x86_64
+> host, a pinned/quiesced core, and many more iterations (see [Measurement
+> setup](#measurement-setup-read-this-before-trusting-numbers)); on the macOS
+> ns timer such subtle leaks are unresolvable.
+
 ## Layout
 
 ```
 latticescope/
-  cli.py         argparse front end (tvla | fuzz-lattice | selftest)
+  cli.py         argparse front end (tvla | sign-tvla | fuzz-lattice | selftest)
   target.py      ctypes binding of the target (symbol resolution, wrappers)
   cshim.c        timing counter and batched timing loops
   build_shim.py  runtime compiler + cache for the timing shim
@@ -287,7 +325,8 @@ latticescope/
   ui.py          rich live UIs with plain-text fallbacks
   selftest.py    builds demo and drives both modules end-to-end
 demo/
-  vuln_kem.c     intentionally-flawed demonstration target
+  vuln_kem.c     intentionally-flawed ML-KEM demonstration target
+  vuln_dsa.c     intentionally-flawed ML-DSA verify target (timing leak)
   build_demo.sh  build script for the demo
 ```
 
@@ -300,11 +339,14 @@ Honest gaps:
   `nonstop_tsc` CPUID bits, so a hypervisor that scales or traps the counter
   (common on cloud VMs) can silently produce untrustworthy `|t|` values with
   no warning.
-- **ML-DSA / signature timing is scaffolded, not wired up.** `SignTarget`,
-  `SignParams`, `SIGN_SETS`, and `ct_time_verify` exist in the codebase, but
-  there is no `sign-tvla` (or equivalent) CLI subcommand — signature
-  verification timing (e.g. Dilithium rejection-sampling leaks) can't
-  actually be audited yet despite the module docstrings mentioning it.
+- **ML-DSA `sign-tvla` `fixed-random` mode is limited by deterministic
+  signing.** Signature verification timing *is* now auditable via the
+  `sign-tvla` subcommand (fixed-invalid vs. fixed-random, mirroring the KEM
+  path). But FIPS 204's default signing is deterministic, so `fixed-random`
+  Class B produces identical signature bytes and only surfaces leakage that
+  does not depend on the signature varying — the meaningful, default mode for
+  a verify path is `fixed-invalid` (reject path vs. accept path). Fuzzing of
+  the ML-DSA parsing surface is still not implemented.
 - **The fuzzer is structure-aware, not coverage-guided.** Mutation strategies
   round-robin with no feedback from what code the target actually executed —
   no seed-corpus growth, no notion of "this input reached a new path." It's

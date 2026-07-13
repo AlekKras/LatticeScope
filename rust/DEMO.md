@@ -55,6 +55,20 @@ ls-run tvla --target ./examples/libmock_pqc.so --profile mock \
 `|t|` should stay under `4.5` the whole run — this is the point: the tool
 doesn't cry wolf on constant-time code.
 
+**A signature target too** — `crypto_sign_verify` is a detached ML-DSA-65-shaped
+verify whose reject path does signature-dependent work (the accept path is short
+and fixed):
+
+```bash
+ls-run tvla --target ./examples/libmock_pqc.so --profile dilithium3 \
+    --op verify --symbol crypto_sign_verify --iters 50000
+```
+
+`|t|` climbs past `4.5` and the verdict flips to `LEAK`. Random ~3.3KB signatures
+never match the validity tag, so both TVLA classes take the reject path and this
+measures its signature-dependent timing — see README's "Known gaps" for why the
+accept branch isn't reached here.
+
 ---
 
 ## 2. Module 2 — structure-aware fuzzer
@@ -78,6 +92,16 @@ profile's `du`/`dv` widths) against a planted decompress bug:
 ```bash
 ls-run fuzz-lattice --target ./examples/libmock_pqc.so --profile mock \
     --surface compressed --symbol decompress_ct_vuln --seed 42 --iters 3000
+```
+
+**A signature unpacker too** — the same `deserialize` surface at ML-DSA's 23-bit
+width (`--profile dilithium3` sets the packing width and payload length; no
+`--in-len`/`--out-len` needed), against a planted 23-bit unpacker (coefficient
+`0x7FFFFF` → SIGSEGV, coefficient `Q` → SIGFPE):
+
+```bash
+ls-run fuzz-lattice --target ./examples/libmock_pqc.so --profile dilithium3 \
+    --surface deserialize --symbol sig_unpack_vuln --seed 42 --iters 8000
 ```
 
 **Throughput: `--fork-server`** — same run, persistent-server backend

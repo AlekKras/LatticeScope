@@ -42,15 +42,16 @@ def _bar(value: float, vmax: float, width: int, char: str = "█") -> str:
 # TVLA
 # ===========================================================================
 
-def _tvla_render(target, cfg, snap):
+def _tvla_render(target, cfg, snap, unit):
     thr = cfg.threshold
-    color = "bright_red" if snap.leaking else ("yellow" if snap.max_abs_t > thr * 0.6 else "bright_green")
+    cur = abs(snap.t)   # calibrated full-stream statistic drives the verdict
+    color = "bright_red" if snap.leaking else ("yellow" if cur > thr * 0.6 else "bright_green")
 
     head = Table.grid(padding=(0, 2))
     head.add_column(justify="left")
     head.add_column(justify="left")
     head.add_row(f"[bold]target[/bold] {target.params.name}",
-                 f"[bold]dec symbol[/bold] {target.dec_name}")
+                 f"[bold]probe symbol[/bold] {target.probe_name}")
     head.add_row(f"[bold]mode[/bold] {cfg.mode}",
                  f"[bold]threshold[/bold] |t| > {thr}")
     core_desc = snap.pinned_core if snap.pinned_core is not None else "unpinned"
@@ -61,32 +62,37 @@ def _tvla_render(target, cfg, snap):
     stats.add_column("value", justify="right")
     stats.add_row("iterations", f"{snap.iterations:,}")
     stats.add_row("exec/s", f"{snap.exec_per_s:,.0f}")
-    stats.add_row("t (current)", f"[{color}]{snap.t:+.3f}[/{color}]")
-    stats.add_row("max |t|", f"[{color}]{snap.max_abs_t:.3f}[/{color}]")
+    stats.add_row("t (verdict)", f"[{color}]{snap.t:+.3f}[/{color}]")
+    stats.add_row("max |t| (peak, sensitivity)", f"{snap.max_abs_t:.3f}")
     stats.add_row("p-value", f"{snap.p_value:.2e}")
-    stats.add_row("mean A / B (cyc)", f"{snap.mean_a:,.1f} / {snap.mean_b:,.1f}")
-    stats.add_row("Δ mean (cyc)", f"{snap.diff:+.2f}")
-    stats.add_row("95% CI of Δ", f"[{snap.ci95[0]:+.2f}, {snap.ci95[1]:+.2f}]")
+    stats.add_row(f"mean A / B ({unit})", f"{snap.mean_a:,.1f} / {snap.mean_b:,.1f}")
+    stats.add_row(f"Δ mean ({unit})", f"{snap.diff:+.2f}")
+    stats.add_row(f"95% CI of Δ ({unit})", f"[{snap.ci95[0]:+.2f}, {snap.ci95[1]:+.2f}]")
     stats.add_row("n_A / n_B", f"{snap.n_a:,} / {snap.n_b:,}")
 
-    # |t| relative to threshold, with a visible marker at the threshold.
-    scale = max(thr * 1.5, snap.max_abs_t)
-    tbar = _bar(snap.max_abs_t, scale, 40)
-    marker_pos = int(min(1.0, thr / scale) * 40)
+    # |t| bar with the threshold pinned at a fixed, always-visible column
+    # (25% width). Fill saturates once |t| blows past — the exact overshoot
+    # length past the marker isn't meaningful, so annotate the magnitude.
+    # ponytail: fixed thr*4 scale, switch to log if sub-2x resolution matters.
+    scale = thr * 4.0
+    tbar = _bar(cur, scale, 40)
+    marker_pos = int((thr / scale) * 40)  # == 10, i.e. one quarter in
     tbar = tbar[:marker_pos] + "|" + tbar[marker_pos + 1:]
+    over = cur / thr if thr else 0.0
+    tag = f"  {over:.1f}× over" if over >= 1.0 else ""
     graph = Table.grid()
     graph.add_column()
-    graph.add_row(Text(f"|t|  {tbar}  {snap.max_abs_t:5.2f}", style=color))
-    # Divergence view: two mean bars sharing a scale.
-    lo = min(snap.mean_a, snap.mean_b)
-    span = max(1.0, abs(snap.mean_a - snap.mean_b) * 4)
-    graph.add_row(Text(f" A   {_bar(snap.mean_a - lo, span, 40, '▓')}", style="cyan"))
-    graph.add_row(Text(f" B   {_bar(snap.mean_b - lo, span, 40, '▓')}", style="magenta"))
+    graph.add_row(Text(f"|t|  {tbar}  {cur:6.2f}{tag}", style=color))
+    # Divergence view: mean cycles from a zero baseline, scaled to the larger
+    # class. Equal means -> equal bars; a large gap -> full bar vs. a sliver.
+    mmax = max(snap.mean_a, snap.mean_b, 1.0)
+    graph.add_row(Text(f" A   {_bar(snap.mean_a, mmax, 32, '▓')} {snap.mean_a:>10,.0f} {unit}", style="cyan"))
+    graph.add_row(Text(f" B   {_bar(snap.mean_b, mmax, 32, '▓')} {snap.mean_b:>10,.0f} {unit}", style="magenta"))
 
     if snap.leaking:
         verdict = Panel(Align.center(Text(
-            f" LEAK DETECTED  |t| = {snap.max_abs_t:.2f} > {thr}  "
-            f"(Δ = {snap.diff:+.2f} cyc, p = {snap.p_value:.1e}) ",
+            f" LEAK DETECTED  |t| = {cur:.2f} > {thr}  "
+            f"(Δ = {snap.diff:+.2f} {unit}, p = {snap.p_value:.1e}) ",
             style="bold white on red")), box=box.HEAVY, style="red")
     else:
         verdict = Panel(Align.center(Text(
@@ -99,8 +105,9 @@ def _tvla_render(target, cfg, snap):
 
 
 def run_tvla_ui(test, cfg, target):
+    unit = test.lib.cs_counter_unit().decode()  # honest per-arch counter label
     if not _interactive():
-        return _run_tvla_plain(test, cfg, target)
+        return _run_tvla_plain(test, cfg, target, unit)
     console = Console()
     final = None
     with Live(console=console, auto_refresh=False, screen=False) as live:
@@ -109,17 +116,17 @@ def run_tvla_ui(test, cfg, target):
             final = snap
             now = time.perf_counter()
             if now - last >= 0.08 or snap.leaking:
-                live.update(_tvla_render(target, cfg, snap), refresh=True)
+                live.update(_tvla_render(target, cfg, snap, unit), refresh=True)
                 last = now
             if snap.leaking and cfg.stop_on_leak:
                 break
         if final:
-            live.update(_tvla_render(target, cfg, final), refresh=True)
+            live.update(_tvla_render(target, cfg, final, unit), refresh=True)
     return final
 
 
-def _run_tvla_plain(test, cfg, target):
-    print(f"[TVLA] target={target.params.name} dec={target.dec_name} "
+def _run_tvla_plain(test, cfg, target, unit):
+    print(f"[TVLA] target={target.params.name} probe={target.probe_name} "
           f"mode={cfg.mode} threshold=|t|>{cfg.threshold}")
     final = None
     last = 0.0
@@ -134,11 +141,12 @@ def _run_tvla_plain(test, cfg, target):
         if now - last >= 0.5 or snap.leaking:
             print(f"  iter={snap.iterations:>10,}  exec/s={snap.exec_per_s:>9,.0f}  "
                   f"t={snap.t:+.3f}  max|t|={snap.max_abs_t:.3f}  "
-                  f"Δ={snap.diff:+.2f}cyc  p={snap.p_value:.1e}")
+                  f"Δ={snap.diff:+.2f} {unit}  p={snap.p_value:.1e}")
             last = now
         if snap.leaking:
-            print(f"  *** LEAK: max|t|={snap.max_abs_t:.2f} > {cfg.threshold} "
-                  f"Δ={snap.diff:+.2f}cyc CI95=[{snap.ci95[0]:+.2f},{snap.ci95[1]:+.2f}]")
+            print(f"  *** LEAK: |t|={abs(snap.t):.2f} > {cfg.threshold} "
+                  f"(peak max|t|={snap.max_abs_t:.2f}) "
+                  f"Δ={snap.diff:+.2f} {unit} CI95=[{snap.ci95[0]:+.2f},{snap.ci95[1]:+.2f}]")
             if cfg.stop_on_leak:
                 break
     return final
@@ -232,3 +240,21 @@ def _run_fuzz_plain(fuzzer, cfg, target):
                   f"[{snap.current_strategy}]")
             last = now
     return final
+
+
+if __name__ == "__main__":
+    # ponytail: self-check for the bar math (the only non-trivial logic here).
+    assert _bar(0, 10, 8) == "░" * 8
+    assert _bar(10, 10, 8) == "█" * 8
+    assert _bar(100, 10, 8) == "█" * 8            # saturates, never overflows
+    assert len(_bar(3, 10, 8)) == 8
+    # Threshold marker must land at a fixed, visible column for any |t|.
+    thr, width = 4.5, 40
+    scale = thr * 4.0
+    for t in (0.0, 3.0, 4.5, 700.0):
+        bar = _bar(t, scale, width)
+        pos = int((thr / scale) * width)
+        marked = bar[:pos] + "|" + bar[pos + 1:]
+        assert 0 < pos < width, pos               # never collapses to an edge
+        assert marked[pos] == "|" and len(marked) == width
+    print("ui.py self-check OK")
